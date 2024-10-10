@@ -10,9 +10,42 @@
 #include <unistd.h>
 #include <uuid/uuid.h>
 
+typedef uint8_t u8;
+
+// this is a bit of a hack that filters out bogus values in vendor usage pages.
+// only classifies usage pages >0xff as vendor
+static int sanitize_rep_desc(u8 *rep_desc, int size) {
+	u8 *p = rep_desc, *q = p, *end = p + size;
+	int depth = 0, bad = 0;
+	while (p != end) {
+		u8 size = *p & 3;
+		u8 typ = *p & ~3;
+		if (size == 3)
+			size = 4;
+		// end coll
+		if (typ == 0xc0)
+			--depth;
+		// begin coll
+		else if (typ == 0xa0)
+			++depth;
+		// top level vendor usage page
+		else if (typ == 0x04 && depth == 0 && size > 1)
+			bad = 1;
+		if (bad)
+			p += 1+size;
+		else
+			for (int i = 0; i < 1+size; ++i)
+				*q++ = *p++;
+		if (typ == 0xc0 && depth == 0)
+			bad = 0;
+	}
+	return q - rep_desc;
+}
+
+
 int main(int argc, char *argv[]) {
-	if (argc != 2)
-		errx(1, "usage: %s port", argv[0]);
+	if (argc != 3)
+		errx(1, "usage: %s rep_desc port", argv[0]);
 
 	int res;
 
@@ -23,7 +56,7 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_in addr = {
 		.sin_family = AF_INET,
 		.sin_addr = { INADDR_ANY },
-		.sin_port = htons(atoi(argv[1])),
+		.sin_port = htons(atoi(argv[2])),
 		.sin_zero = {0},
 	};
 
@@ -47,10 +80,14 @@ int main(int argc, char *argv[]) {
 	uuid_generate_random(uuid);
 	uuid_unparse(uuid, (char *)ev.u.create2.uniq+5);
 
-	res = recv(sock, ev.u.create2.rd_data, sizeof ev.u.create2.rd_data, 0);
+	int descfd = open(argv[1], O_RDONLY);
+	if (descfd < 0)
+		err(1, "open desc");
+	res = read(descfd, ev.u.create2.rd_data, sizeof ev.u.create2.rd_data);
 	if (res < 0)
-		err(1, "recv rd");
-	ev.u.create2.rd_size = res;
+		err(1, "read desc");
+	ev.u.create2.rd_size = sanitize_rep_desc(ev.u.create2.rd_data, res);
+	close(descfd);
 
 	int fd = open("/dev/uhid", O_RDWR | O_CLOEXEC);
 	if (fd < 0)

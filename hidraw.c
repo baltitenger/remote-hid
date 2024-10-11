@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <err.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -35,7 +36,7 @@ int main(int argc, char *argv[]) {
 		if (res < 0)
 			err(1, "read");
 		res = send(sock, buf, res, 0);
-		if (res < 0)
+		if (res < 0 && errno != ECONNREFUSED)
 			err(1, "send rep");
 	}
 }
